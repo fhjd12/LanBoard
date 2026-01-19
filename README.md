@@ -125,3 +125,8 @@ MIT License
 
 ## 🌈 致谢
 如果你觉得这个项目对你有帮助，欢迎给我这个新人学习者一个 ⭐️ Star！
+
+## Maintenance Staus
+- Current stable version: **v1.1.1**
+- Branch: `main`
+- Status: Actively maintained
