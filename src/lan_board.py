@@ -12,37 +12,52 @@ import uvicorn
 import pystray
 from PIL import Image, ImageDraw
 
-# ================= 系统托盘 =================
-def resource_path(rel: str) -> Path:
-    """
-    兼容 .py / .exe
-    - exe: 资源文件路径为 exe 所在目录
-    - py: 资源文件路径为脚本所在目录
-    """
-    meipass = getattr(sys, "_MEIPASS", None)
-    if meipass:
-        return Path(meipass) / rel
-    return BASE_DIR / rel
-
 # ================= App 信息 =================
 APP_NAME = "LanBoard"
-APP_VERSION = "1.1.0"
 
-
-# ================= 路径/配置（关键：兼容 .py / .exe） =================
 def get_base_dir() -> Path:
-    # exe: 以 exe 所在目录为基准
+    """返回程序运行基准目录（兼容 .py / PyInstaller onedir .exe）
+
+    - .exe: 以 exe 所在目录为基准（旁边生成 uploads/ data/ config.json）
+    - .py: 以仓库根目录为基准（假设脚本位于 <root>/src/ 下）
+    """
     if getattr(sys, "frozen", False):
         return Path(sys.executable).resolve().parent
-    # py: 以脚本所在目录为基准
-    return Path(__file__).resolve().parent
-
+    # <root>/src/lan_board.py -> parents[1] == <root>
+    return Path(__file__).resolve().parents[1]
 
 BASE_DIR = get_base_dir()
 UPLOAD_DIR = BASE_DIR / "uploads"
 DATA_DIR = BASE_DIR / "data"
 CONFIG_PATH = BASE_DIR / "config.json"
+VERSION_PATH = BASE_DIR / "version.txt"
 
+def resource_path(rel: str) -> Path:
+    """兼容 .py / .exe 的资源路径解析
+
+    PyInstaller 会把 --add-data 的资源解压到 sys._MEIPASS。
+    本函数优先从 _MEIPASS 取，其次从 BASE_DIR 取。
+    """
+    rel = rel.lstrip("/\\")
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        p = Path(meipass) / rel
+        if p.exists():
+            return p
+    return BASE_DIR / rel
+
+def read_version(default: str = "1.1.1") -> str:
+    try:
+        v = VERSION_PATH.read_text(encoding="utf-8").strip()
+        return v or default
+    except Exception:
+        return default
+
+APP_VERSION = read_version()
+
+# 目录自检：exe 启动时自动在同级生成 uploads / data / config.json
+UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 DEFAULT_CONFIG = {
     "app_name": APP_NAME,
@@ -140,6 +155,12 @@ HISTORY_FILE = DATA_DIR / "history.jsonl"
 
 
 # ================= 工具函数 =================
+def tray_tip(s: str, limit: int = 120) -> str:
+    s = (s or "").replace("\r", " ").replace("\n", " ").strip()
+    if len(s) <= limit:
+        return s
+    return s[:limit - 1] + "…"
+
 def now_ms() -> int:
     return int(time.time() * 1000)
 
@@ -814,14 +835,22 @@ async def ws_endpoint(ws: WebSocket, pass_: str):
 
 
 # ================= 托盘 =================
+from PIL import Image, ImageDraw
+
 def make_icon() -> Image.Image:
+    # 优先加载自定义图标：根目录 lanboard.ico，其次 assets/lanboard.ico（兼容你当前仓库结构）
     try:
-        return Image.open(resource_path("lanboard.ico"))
+        for rel in ("lanboard.ico", "assets/lanboard.ico"):
+            p = resource_path(rel)
+            if p.exists():
+                return Image.open(p)
+        raise FileNotFoundError("lanboard.ico not found")
     except Exception:
+        # fallback：运行环境缺少 ico 或 Pillow 无法读取时，用程序生成一个简单图标
         img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
         d = ImageDraw.Draw(img)
-        d.round_rectangle((8,8,56,56), radius=12, fill=(40,120,255,255))
-        d.text((18, 18), "LB", fill=(255,255,255,255))
+        d.rounded_rectangle((8, 8, 56, 56), radius=12, fill=(40, 120, 255, 255))
+        d.text((18, 18), "LB", fill=(255, 255, 255, 255))
         return img
 
 def run_server_in_thread() -> uvicorn.Server:
@@ -863,12 +892,8 @@ def start_tray(server: uvicorn.Server):
         pystray.MenuItem("退出", quit_app),
     )
 
-    icon = pystray.Icon(
-        APP_NAME,
-        make_icon(),
-        f"{APP_NAME}  v{APP_VERSION}(LAN)",
-        menu,
-    )
+    tip = tray_tip(f"{APP_NAME} v{APP_VERSION}")
+    icon = pystray.Icon(APP_NAME, make_icon(), tip, menu)
     icon.run()
 
 
